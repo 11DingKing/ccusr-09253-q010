@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from .replay import (
     CheckinRecord,
@@ -14,6 +14,7 @@ from .replay import (
     explain_checkin,
     replay,
 )
+from .rules import RuleConfig
 
 
 @dataclass
@@ -25,6 +26,8 @@ class Snapshot:
     generated_at: str
     event_cutoff_id: str | None
     students: list[dict[str, Any]]
+    # 达标判定所用的现行规则版本；None 表示旧版总量语义。
+    rule_version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +35,7 @@ class Snapshot:
             "freeze_id": self.freeze_id,
             "timezone": self.timezone,
             "required_seconds": self.required_seconds,
+            "rule_version": self.rule_version,
             "generated_at": self.generated_at,
             "event_cutoff_id": self.event_cutoff_id,
             "students": self.students,
@@ -47,6 +51,7 @@ class Snapshot:
             generated_at=data["generated_at"],
             event_cutoff_id=data.get("event_cutoff_id"),
             students=list(data.get("students", [])),
+            rule_version=data.get("rule_version"),
         )
 
 
@@ -57,6 +62,8 @@ def _student_to_dict(progress: StudentProgress, tz_name: str) -> dict[str, Any]:
         "pending_seconds": progress.pending_seconds,
         "adjustment_seconds": progress.adjustment_seconds,
         "total_seconds": progress.total_seconds,
+        "counted_seconds": progress.counted_seconds,
+        "total_shortfall_seconds": progress.total_shortfall_seconds,
         "lesson_units": progress.lesson_units,
         "pending_lesson_units": progress.pending_lesson_units,
         "meets_requirement": progress.meets_requirement,
@@ -64,12 +71,44 @@ def _student_to_dict(progress: StudentProgress, tz_name: str) -> dict[str, Any]:
             {"academic_day": d.academic_day, "seconds": d.seconds}
             for d in progress.daily
         ],
+        "daily_categories": [
+            {
+                "academic_day": d.academic_day,
+                "category": d.category,
+                "seconds": d.seconds,
+            }
+            for d in progress.daily_categories
+        ],
+        "categories": [
+            {
+                "category": c.category,
+                "attributed_seconds": c.attributed_seconds,
+                "adjustment_seconds": c.adjustment_seconds,
+                "counted_seconds": c.counted_seconds,
+                "min_seconds": c.min_seconds,
+                "max_seconds": c.max_seconds,
+                "shortfall_seconds": c.shortfall_seconds,
+                "over_cap_seconds": c.over_cap_seconds,
+                "meets_minimum": c.meets_minimum,
+            }
+            for c in progress.categories
+        ],
+        "exclusions": [
+            {
+                "reason": e.reason,
+                "seconds": e.seconds,
+                "event_id": e.event_id,
+                "category": e.category,
+            }
+            for e in progress.exclusions
+        ],
         "checkins": [explain_checkin(c, tz_name) for c in progress.checkins],
         "adjustments": [
             {
                 "event_id": a.event_id,
                 "seconds": a.seconds,
                 "reason": a.reason,
+                "category": a.category,
             }
             for a in progress.adjustments
         ],
@@ -82,6 +121,8 @@ def build_snapshot(
     plan_version: str,
     timezone_name: str,
     required_seconds: int,
+    rules: Mapping[str, RuleConfig] | None = None,
+    current_rule: RuleConfig | None = None,
     freeze_id: str | None = None,
     event_cutoff_id: str | None = None,
     generated_at: datetime | None = None,
@@ -92,6 +133,8 @@ def build_snapshot(
         plan_version=plan_version,
         timezone_name=timezone_name,
         required_seconds=required_seconds,
+        rules=rules,
+        current_rule=current_rule,
         up_to_event_id=event_cutoff_id,
     )
     if generated_at is None:
@@ -111,6 +154,7 @@ def build_snapshot(
         generated_at=generated_at.isoformat().replace("+00:00", "Z"),
         event_cutoff_id=event_cutoff_id,
         students=students,
+        rule_version=state.rule_version,
     )
 
 
@@ -136,6 +180,7 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict[str, Any]:
                     "before": None,
                     "after": {
                         "total_seconds": after["total_seconds"],
+                        "counted_seconds": after.get("counted_seconds"),
                         "lesson_units": after["lesson_units"],
                         "meets_requirement": after["meets_requirement"],
                     },
@@ -149,6 +194,7 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict[str, Any]:
                     "change_type": "removed",
                     "before": {
                         "total_seconds": before["total_seconds"],
+                        "counted_seconds": before.get("counted_seconds"),
                         "lesson_units": before["lesson_units"],
                         "meets_requirement": before["meets_requirement"],
                     },
@@ -163,6 +209,8 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict[str, Any]:
             "pending_seconds",
             "adjustment_seconds",
             "total_seconds",
+            "counted_seconds",
+            "total_shortfall_seconds",
             "lesson_units",
             "pending_lesson_units",
             "meets_requirement",
@@ -191,6 +239,8 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict[str, Any]:
         "new_generated_at": new.generated_at,
         "old_event_cutoff_id": old.event_cutoff_id,
         "new_event_cutoff_id": new.event_cutoff_id,
+        "old_rule_version": old.rule_version,
+        "new_rule_version": new.rule_version,
         "student_changes": student_changes,
         "students_affected": len(student_changes),
     }

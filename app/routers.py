@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from . import services
+from .core.rules import CategoryLimit, RuleConfigError
 from .db import get_db
 from .schemas import (
     DiffOut,
@@ -16,8 +18,11 @@ from .schemas import (
     ImportResult,
     PlanIn,
     PlanOut,
+    RuleConfigIn,
+    RuleConfigOut,
     SnapshotOut,
     StudentProgressOut,
+    WarningsOut,
 )
 
 router = APIRouter(prefix="/api")
@@ -39,6 +44,78 @@ def read_plan(plan_version: str, db: Session = Depends(get_db)) -> Any:
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
     return plan
+
+
+@router.put(
+    "/plans/{plan_version}/rules/{rule_version}",
+    response_model=RuleConfigOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def put_rule_config(
+    plan_version: str,
+    rule_version: str,
+    body: RuleConfigIn,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        return services.put_rule_config(
+            db,
+            plan_version=plan_version,
+            rule_version=rule_version,
+            categories=[
+                CategoryLimit(
+                    code=c.code,
+                    min_ratio=Fraction(c.min_ratio),
+                    max_ratio=Fraction(c.max_ratio),
+                )
+                for c in body.categories
+            ],
+            activity_category_map=body.activity_category_map,
+        )
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuleConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except services.RuleConfigConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_version}/rules", response_model=list[RuleConfigOut])
+def list_rules(plan_version: str, db: Session = Depends(get_db)) -> Any:
+    try:
+        return services.list_rule_config_views(db, plan_version)
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_version}/rules/current", response_model=RuleConfigOut)
+def get_current_rule(plan_version: str, db: Session = Depends(get_db)) -> Any:
+    try:
+        current = services.get_current_rule_config(db, plan_version)
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if current is None:
+        raise HTTPException(status_code=404, detail="no published rule")
+    return current
+
+
+@router.post(
+    "/plans/{plan_version}/rules/{rule_version}/publish",
+    response_model=RuleConfigOut,
+)
+def publish_rule(
+    plan_version: str, rule_version: str, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return services.publish_rule(
+            db, plan_version=plan_version, rule_version=rule_version
+        )
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.RuleNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.RuleConfigConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post(
@@ -67,6 +144,23 @@ def get_snapshot(plan_version: str, db: Session = Depends(get_db)) -> Any:
     try:
         snap = services.current_snapshot(db, plan_version)
         return snap.to_dict()
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans/{plan_version}/warnings",
+    response_model=WarningsOut,
+)
+def get_warnings(
+    plan_version: str,
+    at_risk_only: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        return services.batch_warnings(
+            db, plan_version, at_risk_only=at_risk_only
+        )
     except services.PlanNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
