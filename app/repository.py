@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .core.replay import Event as CoreEvent
 from .core.replay import EventType
 from .models import Event as EventModel
-from .models import Freeze, Plan
+from .models import Freeze, Plan, Rule
 
 
 def get_plan(db: Session, plan_version: str) -> Plan | None:
@@ -45,6 +45,53 @@ def upsert_plan(
     return plan
 
 
+def set_active_rule(
+    db: Session, plan_version: str, rule_version: str
+) -> Plan:
+    """执行确定性的业务处理。"""
+    plan = db.get(Plan, plan_version)
+    assert plan is not None
+    plan.active_rule_version = rule_version
+    db.commit()
+    return plan
+
+
+def insert_rule(
+    db: Session,
+    *,
+    plan_version: str,
+    rule_version: str,
+    definition: dict[str, Any],
+) -> Rule | None:
+    """执行确定性的业务处理。"""
+    stmt = sqlite_insert(Rule).values(
+        plan_version=plan_version,
+        rule_version=rule_version,
+        definition=definition,
+    )
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=["plan_version", "rule_version"]
+    ).returning(Rule.plan_version)
+    inserted = db.execute(stmt).scalar_one_or_none()
+    db.commit()
+    if inserted is not None:
+        return db.get(Rule, (plan_version, rule_version))
+    return None
+
+
+def get_rule(db: Session, plan_version: str, rule_version: str) -> Rule | None:
+    return db.get(Rule, (plan_version, rule_version))
+
+
+def list_rule_rows(db: Session, plan_version: str) -> list[Rule]:
+    stmt = (
+        select(Rule)
+        .where(Rule.plan_version == plan_version)
+        .order_by(Rule.created_at, Rule.rule_version)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def _to_core_event(row: EventModel) -> CoreEvent:
     return CoreEvent(
         event_id=row.event_id,
@@ -53,6 +100,7 @@ def _to_core_event(row: EventModel) -> CoreEvent:
         student_id=row.student_id,
         payload=dict(row.payload),
         created_at=row.created_at,
+        rule_version=row.rule_version,
     )
 
 
@@ -61,6 +109,7 @@ def insert_events(
     *,
     plan_version: str,
     events: list[dict[str, Any]],
+    rule_version: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """执行确定性的业务处理。"""
     accepted: list[str] = []
@@ -72,6 +121,7 @@ def insert_events(
             student_id=e["student_id"],
             event_type=e["event_type"],
             payload=e["payload"],
+            rule_version=rule_version,
         )
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["event_id", "plan_version"]

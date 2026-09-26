@@ -31,12 +31,24 @@ class Plan(Base):
     plan_version: Mapped[str] = mapped_column(String(128), primary_key=True)
     iana_timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     required_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_rule_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
 
     __table_args__ = (
         CheckConstraint("required_seconds >= 0", name="ck_plans_required_nonneg"),
+    )
+
+
+class Rule(Base):
+    __tablename__ = "rules"
+
+    plan_version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    rule_version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    definition: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
 
 
@@ -49,6 +61,7 @@ class Event(Base):
     student_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rule_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )

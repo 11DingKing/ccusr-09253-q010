@@ -101,3 +101,41 @@ def union_seconds(intervals: list[tuple[datetime, datetime]]) -> int:
     for start, end in merge_intervals(intervals):
         total += elapsed_seconds(start, end)
     return total
+
+
+def intersect_intervals(
+    interval: tuple[datetime, datetime],
+    windows: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """区间与窗口并集的交集，按时间升序返回。"""
+    start, end = interval
+    pieces: list[tuple[datetime, datetime]] = []
+    for win_start, win_end in merge_intervals(windows):
+        seg_start = max(start, win_start)
+        seg_end = min(end, win_end)
+        if seg_start < seg_end:
+            pieces.append((seg_start, seg_end))
+    return pieces
+
+
+def subtract_intervals(
+    interval: tuple[datetime, datetime],
+    windows: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """区间减去窗口并集后的剩余部分，按时间升序返回。"""
+    start, end = interval
+    pieces: list[tuple[datetime, datetime]] = []
+    cursor = start
+    for win_start, win_end in merge_intervals(windows):
+        if win_end <= cursor:
+            continue
+        if win_start >= end:
+            break
+        if win_start > cursor:
+            pieces.append((cursor, win_start))
+        cursor = win_end
+        if cursor >= end:
+            break
+    if cursor < end:
+        pieces.append((cursor, end))
+    return pieces

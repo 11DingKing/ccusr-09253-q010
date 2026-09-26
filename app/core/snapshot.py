@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from .replay import (
     CheckinRecord,
@@ -14,6 +14,7 @@ from .replay import (
     explain_checkin,
     replay,
 )
+from .rules import RuleDef
 
 
 @dataclass
@@ -25,6 +26,8 @@ class Snapshot:
     generated_at: str
     event_cutoff_id: str | None
     students: list[dict[str, Any]]
+    rule_version: str | None = None
+    rule_versions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,6 +37,8 @@ class Snapshot:
             "required_seconds": self.required_seconds,
             "generated_at": self.generated_at,
             "event_cutoff_id": self.event_cutoff_id,
+            "rule_version": self.rule_version,
+            "rule_versions": self.rule_versions,
             "students": self.students,
         }
 
@@ -47,6 +52,8 @@ class Snapshot:
             generated_at=data["generated_at"],
             event_cutoff_id=data.get("event_cutoff_id"),
             students=list(data.get("students", [])),
+            rule_version=data.get("rule_version"),
+            rule_versions=list(data.get("rule_versions", [])),
         )
 
 
@@ -60,8 +67,35 @@ def _student_to_dict(progress: StudentProgress, tz_name: str) -> dict[str, Any]:
         "lesson_units": progress.lesson_units,
         "pending_lesson_units": progress.pending_lesson_units,
         "meets_requirement": progress.meets_requirement,
+        "countable_seconds": progress.countable_seconds,
+        "uncategorized_seconds": progress.uncategorized_seconds,
+        "total_gap_seconds": progress.total_gap_seconds,
+        "categories": [
+            {
+                "category": c.category,
+                "counted_seconds": c.counted_seconds,
+                "pending_seconds": c.pending_seconds,
+                "adjustment_seconds": c.adjustment_seconds,
+                "credited_seconds": c.credited_seconds,
+                "min_permille": c.min_permille,
+                "max_permille": c.max_permille,
+                "min_seconds": c.min_seconds,
+                "max_seconds": c.max_seconds,
+                "gap_seconds": c.gap_seconds,
+                "excess_seconds": c.excess_seconds,
+                "min_met": c.min_met,
+                "lesson_units": c.lesson_units,
+            }
+            for c in progress.categories
+        ],
+        "non_countable": progress.non_countable,
+        "event_rule_versions": progress.event_rule_versions,
         "daily": [
-            {"academic_day": d.academic_day, "seconds": d.seconds}
+            {
+                "academic_day": d.academic_day,
+                "seconds": d.seconds,
+                "categories": d.categories,
+            }
             for d in progress.daily
         ],
         "checkins": [explain_checkin(c, tz_name) for c in progress.checkins],
@@ -70,6 +104,7 @@ def _student_to_dict(progress: StudentProgress, tz_name: str) -> dict[str, Any]:
                 "event_id": a.event_id,
                 "seconds": a.seconds,
                 "reason": a.reason,
+                "category": a.category,
             }
             for a in progress.adjustments
         ],
@@ -85,6 +120,8 @@ def build_snapshot(
     freeze_id: str | None = None,
     event_cutoff_id: str | None = None,
     generated_at: datetime | None = None,
+    rules: Mapping[str, RuleDef] | None = None,
+    active_rule_version: str | None = None,
 ) -> Snapshot:
     """执行确定性的业务处理。"""
     state: ReplayState = replay(
@@ -93,6 +130,8 @@ def build_snapshot(
         timezone_name=timezone_name,
         required_seconds=required_seconds,
         up_to_event_id=event_cutoff_id,
+        rules=rules,
+        active_rule_version=active_rule_version,
     )
     if generated_at is None:
         generated_at = datetime.now(timezone.utc)
@@ -111,6 +150,8 @@ def build_snapshot(
         generated_at=generated_at.isoformat().replace("+00:00", "Z"),
         event_cutoff_id=event_cutoff_id,
         students=students,
+        rule_version=state.active_rule_version,
+        rule_versions=state.rule_versions,
     )
 
 
@@ -166,6 +207,11 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict[str, Any]:
             "lesson_units",
             "pending_lesson_units",
             "meets_requirement",
+            "countable_seconds",
+            "uncategorized_seconds",
+            "total_gap_seconds",
+            "categories",
+            "non_countable",
         )
         changed_fields = {}
         for field_name in fields:
